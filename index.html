@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Market Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #000;
+            color: #fff;
+        }
+        .container {
+            display: flex;
+            max-width: 1200px;
+            margin: auto;
+        }
+        .left-column {
+            width: 30%;
+            margin-right: 20px;
+        }
+        .right-column {
+            width: 70%;
+        }
+        .section {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #333;
+        }
+        h1 {
+            text-align: center;
+            color: #fff;
+        }
+        h2 {
+            color: #fff;
+        }
+        .actions input, .actions button {
+            margin-right: 10px;
+        }
+        .message {
+            color: green;
+            margin-top: 10px;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+            display: none;  /* Hide by default */
+        }
+        .stock-button {
+            background: none;
+            border: none;
+            color: #fff;
+            text-align: left;
+            width: 100%;
+            font-size: 1rem;
+            cursor: pointer;
+            padding: 10px 0;
+        }
+        .stock-button:hover {
+            text-decoration: underline;
+        }
+        .btn {
+            padding: 8px 16px;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background-color 0.3s ease;
+        }
+        .btn-buy {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-buy:hover {
+            background-color: #218838;
+        }
+        .btn-sell {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-sell:hover {
+            background-color: #c82333;
+        }
+        .btn-toggle {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-toggle:hover {
+            background-color: #0056b3;
+        }
+        .btn-reset {
+            background-color: #ffc107;
+            color: black;
+        }
+        .btn-reset:hover {
+            background-color: #e0a800;
+        }
+        .cash-text {
+            font-size: 1.5rem;
+            color: #28a745;
+        }
+        .change-positive {
+            color: #28a745;
+        }
+        .change-negative {
+            color: #dc3545;
+        }
+        .gain-loss {
+            font-size: 0.9rem;
+        }
+        .loss {
+            color: #dc3545;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>Stock Market Game</h1>
+    <div class="container">
+        <div class="left-column">
+            <div class="section portfolio">
+                <h2>Portfolio</h2>
+                <div id="portfolio-status"></div>
+            </div>
+            <div class="section actions">
+                <h2>Actions</h2>
+                <input type="text" id="stock-name" placeholder="Stock Name">
+                <input type="number" id="amount" placeholder="Amount">
+                <button class="btn btn-buy" onclick="buyStock()">Buy Stock</button>
+                <button class="btn btn-sell" onclick="sellStock()">Sell Stock</button>
+                <button class="btn btn-toggle" id="toggle-simulation" onclick="toggleSimulation()">Start Simulation</button>
+                <button class="btn btn-reset" onclick="resetSimulation()">Reset Simulation</button>
+                <div class="message" id="message"></div>
+            </div>
+        </div>
+        <div class="right-column">
+            <div class="section market">
+                <h2>Market</h2>
+                <div id="market-status"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let visibleGraphs = new Set();
+        let simulationRunning = false;
+        const MAX_POINTS = 35;
+
+        async function fetchMarket() {
+            const response = await fetch('/market');
+            const market = await response.json();
+            let marketStatus = '';
+            for (const [name, data] of Object.entries(market)) {
+                const changeClass = data.change_percent >= 0 ? 'change-positive' : 'change-negative';
+                marketStatus += `
+                    <button class="stock-button" onclick="toggleGraph('${name}')">${name}: $${data.price.toFixed(2)} <span class="${changeClass}">(${data.change_percent.toFixed(2)}%)</span></button>
+                    <div class="chart-container" id="container-${name}">
+                        <canvas id="chart-${name}"></canvas>
+                    </div>`;
+            }
+            document.getElementById('market-status').innerHTML = marketStatus;
+            for (const name of Object.keys(market)) {
+                fetchStockHistory(name);
+                if (visibleGraphs.has(name)) {
+                    document.getElementById(`container-${name}`).style.display = 'block';
+                }
+            }
+        }
+
+        function toggleGraph(stockName) {
+            const container = document.getElementById(`container-${stockName}`);
+            const isVisible = container.style.display === 'block';
+            container.style.display = isVisible ? 'none' : 'block';
+            if (isVisible) {
+                visibleGraphs.delete(stockName);
+            } else {
+                visibleGraphs.add(stockName);
+            }
+        }
+
+        async function fetchStockHistory(stockName) {
+            const response = await fetch(`/stock-history/${stockName}`);
+            const history = await response.json();
+            console.log(`Fetched history for ${stockName}`, history);  // Log the fetched history to verify the data format
+
+            const ctx = document.getElementById(`chart-${stockName}`).getContext('2d');
+
+            if (history.dates.length === 0 || history.prices.length === 0) {
+                console.error(`No data available for ${stockName}`);
+                return;
+            }
+
+            // Ensure only the last MAX_POINTS points are shown
+            let dates = history.dates;
+            let prices = history.prices;
+            if (dates.length > MAX_POINTS) {
+                dates = dates.slice(-MAX_POINTS);
+                prices = prices.slice(-MAX_POINTS);
+            }
+
+            // Determine colors based on price change
+            const borderColor = prices[prices.length - 1] >= prices[0] ? 'rgba(0, 255, 0, 1)' : 'rgba(255, 0, 0, 1)';
+
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [{
+                        label: `${stockName} Price`,
+                        data: prices,
+                        borderColor: borderColor,
+                        borderWidth: 1,
+                        fill: false,
+                        tension: 0.1  // Ensure the line is drawn smoothly
+                    }]
+                },
+                options: {
+                    scales: {
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time',
+                                color: '#fff'
+                            },
+                            ticks: {
+                                color: '#fff'
+                            }
+                        },
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'Price',
+                                color: '#fff'
+                            },
+                            ticks: {
+                                color: '#fff'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            labels: {
+                                color: '#fff'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function fetchPortfolio() {
+            const response = await fetch('/portfolio');
+            const portfolio = await response.json();
+            let cashRounded = portfolio.cash.toFixed(2);
+            let portfolioStatus = `<div class="cash-text">Cash: $${cashRounded}</div><br><ul>`;
+            for (const [name, amount] of Object.entries(portfolio.stocks)) {
+                portfolioStatus += `<li>${name}: ${amount} shares</li>`;
+            }
+            portfolioStatus += '</ul>';
+            document.getElementById('portfolio-status').innerHTML = portfolioStatus;
+        }
+
+        async function buyStock() {
+            const stockName = document.getElementById('stock-name').value;
+            const amount = document.getElementById('amount').value;
+            const response = await fetch('/buy', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ stock_name: stockName, amount: amount })
+            });
+            const result = await response.json();
+            const message = result.message;
+            const totalCost = result.total_cost;
+            document.getElementById('message').innerHTML = `${message} <span class="gain-loss loss">(-${totalCost.toFixed(2)})</span>`;
+            fetchPortfolio();
+            fetchMarket();
+        }
+
+        async function sellStock() {
+            const stockName = document.getElementById('stock-name').value;
+            const amount = document.getElementById('amount').value;
+            const response = await fetch('/sell', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ stock_name: stockName, amount: amount })
+            });
+            const result = await response.json();
+            const message = result.message;
+            const totalEarnings = result.total_earnings;
+            const gainLossClass = totalEarnings >= 0 ? 'change-positive' : 'change-negative';
+            const gainLossText = totalEarnings >= 0 ? `(+${totalEarnings.toFixed(2)})` : `(${totalEarnings.toFixed(2)})`;
+            document.getElementById('message').innerHTML = `${message} <span class="gain-loss ${gainLossClass}">${gainLossText}</span>`;
+            fetchPortfolio();
+            fetchMarket();
+        }
+
+        async function toggleSimulation() {
+            const response = await fetch('/toggle-simulation', {
+                method: 'POST'
+            });
+            const result = await response.json();
+            simulationRunning = !simulationRunning;
+            document.getElementById('toggle-simulation').innerText = simulationRunning ? 'Stop Simulation' : 'Start Simulation';
+            document.getElementById('message').innerText = result.message;
+        }
+
+        async function resetSimulation() {
+            const response = await fetch('/reset', {
+                method: 'POST'
+            });
+            const result = await response.json();
+            simulationRunning = false;
+            document.getElementById('toggle-simulation').innerText = 'Start Simulation';
+            document.getElementById('message').innerText = result.message;
+            fetchMarket();
+            fetchPortfolio();
+        }
+
+        // Initial fetch
+        fetchMarket();
+        fetchPortfolio();
+
+        // Periodically update market data every 10 seconds
+        setInterval(fetchMarket, 10000);
+    </script>
+</body>
+</html>
